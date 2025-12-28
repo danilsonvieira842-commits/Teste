@@ -1,0 +1,7 @@
+{
+  "name": "Vieira Boards - Smart Productivity",
+  "description": "High-performance project management with AI insights and compact professional UI.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
