@@ -1,25 +1,14 @@
 
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { GoogleGenAI, Type } from '@google/genai';
-import { BoardData, Task, Priority, Subtask, User, Column, Comment, NotificationSettings, AISuggestion, PrioritizationResult, DeadlinePredictionResult, Attachment } from './types';
-import { analyzeBoardProductivity, breakdownTaskIntoSubtasks, generateTasksFromPrompt, prioritizeBoardWithAI, predictTaskDeadline } from './services/geminiService';
-import { triggerTaskUpdateNotification, triggerMentionNotification } from './services/notificationService';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { BoardData, Task, Priority, Subtask, User, Comment, PrioritizationResult, DeadlinePredictionResult, NotificationSettings } from './types';
+import { analyzeBoardProductivity, breakdownTaskIntoSubtasks, prioritizeBoardWithAI, predictTaskDeadline } from './services/geminiService';
 import { translations, Language } from './translations';
 import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, AreaChart, Area, Legend
+  ResponsiveContainer, PieChart, Pie, Tooltip, AreaChart, Area
 } from 'recharts';
 import * as XLSX from 'xlsx';
-import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
 
 declare const confetti: any;
-
-const AVAILABLE_ICONS = [
-  'fa-rocket', 'fa-bug', 'fa-code', 'fa-palette', 
-  'fa-bullhorn', 'fa-flask', 'fa-shield-halved', 'fa-envelope',
-  'fa-mobile-screen', 'fa-database', 'fa-wrench', 'fa-check-double',
-  'fa-briefcase', 'fa-lightbulb', 'fa-chart-line', 'fa-cloud'
-];
 
 const MOCK_TEAM: User[] = [
   { id: 'user-1', name: 'Alice Silva', email: 'alice@vieira.com', photoURL: 'https://ui-avatars.com/api/?name=Alice+Silva&background=f3b032&color=fff', role: 'admin', lang: 'pt', points: 1200, notifications: { slackEnabled: false, whatsappEnabled: false, notifyOnHighPriority: true, notifyOnMentions: true } },
@@ -27,46 +16,32 @@ const MOCK_TEAM: User[] = [
   { id: 'user-3', name: 'Carla Rocha', email: 'carla@vieira.com', photoURL: 'https://ui-avatars.com/api/?name=Carla+Rocha&background=10b981&color=fff', role: 'editor', lang: 'pt', points: 940, notifications: { slackEnabled: false, whatsappEnabled: false, notifyOnHighPriority: true, notifyOnMentions: true } },
 ];
 
-const getTagColors = (tag: string) => {
-  const hash = tag.split('').reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
-  const h = Math.abs(hash % 360);
-  return {
-    bg: `hsla(${h}, 80%, 12%, 1)`, 
-    border: `hsla(${h}, 80%, 45%, 1)`,
-    text: '#ffffff' 
-  };
-};
+const DEFAULT_BOARD = (title: string): BoardData => ({
+  id: Math.random().toString(36).substr(2, 9),
+  title: title,
+  tasks: {},
+  columns: {
+    'col-1': { id: 'col-1', title: 'A Fazer', taskIds: [] },
+    'col-2': { id: 'col-2', title: 'Em Andamento', taskIds: [] },
+    'col-3': { id: 'col-3', title: 'Concluído', taskIds: [] },
+  },
+  columnOrder: ['col-1', 'col-2', 'col-3'],
+  userStats: { points: 0, level: 1, badges: [] }
+});
 
-const getFileIcon = (type: string) => {
-  if (type.includes('image')) return 'fa-file-image';
-  if (type.includes('pdf')) return 'fa-file-pdf';
-  if (type.includes('word') || type.includes('text')) return 'fa-file-lines';
-  if (type.includes('excel') || type.includes('spreadsheet')) return 'fa-file-excel';
-  if (type.includes('zip') || type.includes('compressed')) return 'fa-file-zipper';
-  return 'fa-file';
-};
-
-const BrandLogo = ({ size = "md", isDarkMode = true }: { size?: "sm" | "md" | "lg", isDarkMode?: boolean }) => {
+const BrandLogo = ({ size = "md" }: { size?: "sm" | "md" | "lg" }) => {
   const sizes = {
     sm: { icon: "w-6 h-6", text: "text-lg" },
     md: { icon: "w-8 h-8", text: "text-xl" },
-    lg: { icon: "w-16 h-16", text: "text-4xl" }
+    lg: { icon: "w-14 h-14", text: "text-3xl" }
   };
   const { icon, text } = sizes[size];
-
   return (
-    <div className="flex items-center gap-3 select-none" aria-hidden="true">
-      <div className={`${icon} bg-[#f3b032] rounded-lg flex items-center justify-center shadow-lg shadow-[#f3b032]/20 shrink-0`}>
-        <svg viewBox="0 0 100 100" className="w-[70%] h-[70%] fill-white">
-          <rect x="15" y="20" width="20" height="10" rx="3" />
-          <rect x="40" y="20" width="20" height="10" rx="3" />
-          <rect x="65" y="20" width="20" height="10" rx="3" />
-          <rect x="15" y="38" width="20" height="44" rx="4" />
-          <rect x="65" y="38" width="20" height="44" rx="4" />
-          <rect x="40" y="48" width="20" height="14" rx="3" />
-        </svg>
+    <div className="flex items-center gap-2 select-none">
+      <div className={`${icon} bg-gradient-to-br from-[#f3b032] to-[#b47e12] rounded-xl flex items-center justify-center shadow-lg shadow-[#f3b032]/20`}>
+        <i className="fas fa-bolt text-white text-[60%]"></i>
       </div>
-      <div className={`font-black uppercase tracking-tighter leading-[0.85] ${text}`}>
+      <div className={`font-black uppercase tracking-tighter leading-none ${text}`}>
         <span className="block text-white">Vieira</span>
         <span className="block text-[#f3b032]">Boards</span>
       </div>
@@ -74,577 +49,495 @@ const BrandLogo = ({ size = "md", isDarkMode = true }: { size?: "sm" | "md" | "l
   );
 };
 
-const INITIAL_DATA: BoardData = {
-  tasks: {
-    'task-1': { id: 'task-1', title: 'Interface Otimizada', description: 'Reduzir padding e tamanhos de fonte para maior densidade.', priority: Priority.HIGH, tags: ['ux', 'ui'], createdAt: Date.now(), dueDate: Date.now() + 86400000, subtasks: [{ id: 's1', title: 'Ajustar variáveis CSS', completed: true }, { id: 's2', title: 'Refatorar cards', completed: false }], complexity: 4, comments: [], attachments: [], icon: 'fa-rocket', assigneeId: 'user-1' },
-  },
-  columns: {
-    'col-1': { id: 'col-1', title: 'Backlog', taskIds: ['task-1'] },
-    'col-2': { id: 'col-2', title: 'Progresso', taskIds: [] },
-    'col-3': { id: 'col-3', title: 'Feito', taskIds: [] },
-  },
-  columnOrder: ['col-1', 'col-2', 'col-3'],
-  userStats: { points: 150, level: 1, badges: [] },
-  team: MOCK_TEAM
-};
-
-const DEFAULT_NOTIFICATIONS: NotificationSettings = {
-  slackEnabled: false,
-  slackWebhookUrl: '',
-  whatsappEnabled: false,
-  whatsappNumber: '',
-  notifyOnHighPriority: true,
-  notifyOnMentions: true
-};
+const Toggle = ({ active, onClick, label }: { active: boolean, onClick: () => void, label: string }) => (
+  <div className="flex items-center justify-between py-2">
+    <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">{label}</span>
+    <button 
+      onClick={onClick}
+      className={`w-12 h-6 rounded-full transition-all relative ${active ? 'bg-[#f3b032]' : 'bg-white/10'}`}
+    >
+      <div className={`absolute top-1 w-4 h-4 rounded-full bg-black transition-all ${active ? 'left-7' : 'left-1'}`} />
+    </button>
+  </div>
+);
 
 const App: React.FC = () => {
+  // --- Estados ---
   const [user, setUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('vieira_session_user');
     return saved ? JSON.parse(saved) : null;
   });
 
-  const [data, setData] = useState<BoardData>(() => {
-    const saved = localStorage.getItem('vieira_boards_data');
-    return saved ? JSON.parse(saved) : INITIAL_DATA;
+  const [boards, setBoards] = useState<BoardData[]>(() => {
+    const saved = localStorage.getItem('vieira_all_boards');
+    if (saved) return JSON.parse(saved);
+    const initial = DEFAULT_BOARD("Work Estratégico");
+    initial.tasks = {
+      'task-1': { id: 'task-1', title: 'Explorar IA Vieira', description: 'Abra esta tarefa para ver o poder do Gemini.', priority: Priority.HIGH, tags: ['startup'], createdAt: Date.now(), subtasks: [{id: 's1', title: 'Testar Smart Breakdown', completed: false}], comments: [], attachments: [], icon: 'fa-sparkles', assigneeId: 'user-1' }
+    };
+    initial.columns['col-1'].taskIds = ['task-1'];
+    return [initial];
   });
 
+  const [activeBoardId, setActiveBoardId] = useState<string>(boards[0]?.id || '');
   const [lang, setLang] = useState<Language>(user?.lang || 'pt');
-  const [showDashboard, setShowDashboard] = useState(false);
-  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [viewMode, setViewMode] = useState<'board' | 'dashboard' | 'projects' | 'profile'>('board');
   const [showPrioritizeModal, setShowPrioritizeModal] = useState(false);
   const [prioritizeCriteria, setPrioritizeCriteria] = useState('');
   const [isPrioritizing, setIsPrioritizing] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [inlineExpandedTaskIds, setInlineExpandedTaskIds] = useState<Set<string>>(new Set());
-  const [insights, setInsights] = useState('Iniciando análise inteligente...');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [insights, setInsights] = useState('Workspace otimizado.');
   const [notification, setNotification] = useState<string | null>(null);
+  const [isBreakingDown, setIsBreakingDown] = useState(false);
+  const [isPredictingDeadline, setIsPredictingDeadline] = useState(false);
+  const [predictionResult, setPredictionResult] = useState<DeadlinePredictionResult | null>(null);
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [newCommentText, setNewCommentText] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterAssigneeId, setFilterAssigneeId] = useState<string | null>(null);
-  const [isListening, setIsListening] = useState(false);
-  const [isCreatingVoiceTask, setIsCreatingVoiceTask] = useState(false);
-  const [isPredictingDeadline, setIsPredictingDeadline] = useState(false);
-  const [isBreakingDown, setIsBreakingDown] = useState(false);
-  const [predictionResult, setPredictionResult] = useState<DeadlinePredictionResult | null>(null);
-  
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const activeBoard = useMemo(() => boards.find(b => b.id === activeBoardId) || boards[0], [boards, activeBoardId]);
+  const selectedTask = selectedTaskId ? activeBoard.tasks[selectedTaskId] : null;
   const t = translations[lang];
 
+  // --- Efeitos ---
   useEffect(() => {
-    localStorage.setItem('vieira_boards_data', JSON.stringify(data));
-    const boardContext = JSON.stringify({
-      tasks: Object.values(data.tasks).length,
-      columns: data.columnOrder.length,
-      completed: data.columns['col-3'].taskIds.length
-    });
-    analyzeBoardProductivity(boardContext, lang).then(setInsights);
-  }, [data, lang]);
+    localStorage.setItem('vieira_all_boards', JSON.stringify(boards));
+    if (activeBoard) {
+      const context = JSON.stringify({
+        tasks: Object.keys(activeBoard.tasks).length,
+        done: activeBoard.columns['col-3'].taskIds.length
+      });
+      analyzeBoardProductivity(context, lang).then(setInsights);
+    }
+  }, [boards, activeBoardId, lang]);
 
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem('vieira_session_user', JSON.stringify(user));
+    }
+  }, [user]);
+
+  // --- Handlers ---
   const showNotification = (msg: string) => {
     setNotification(msg);
-    setTimeout(() => setNotification(null), 4000);
+    setTimeout(() => setNotification(null), 3000);
+  };
+
+  const handleAuth = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) return;
+    const u: User = { id: 'user-main', name: email.split('@')[0].toUpperCase(), email, role: 'admin', lang: 'pt', points: 100, photoURL: `https://ui-avatars.com/api/?name=${email}&background=f3b032&color=000`, notifications: { slackEnabled: false, whatsappEnabled: false, notifyOnHighPriority: true, notifyOnMentions: true } };
+    setUser(u);
+  };
+
+  const updateActiveBoard = (updates: Partial<BoardData>) => {
+    setBoards(prev => prev.map(b => b.id === activeBoardId ? { ...b, ...updates } : b));
   };
 
   const updateTask = (taskId: string, updates: Partial<Task>) => {
-    const updatedTask = { ...data.tasks[taskId], ...updates };
-    setData(prev => ({
-      ...prev,
-      tasks: { ...prev.tasks, [taskId]: updatedTask }
-    }));
-    if (user && updates.priority) {
-      triggerTaskUpdateNotification(user, updatedTask, `Prioridade alterada para ${updates.priority.toUpperCase()}`);
-    }
+    const updatedTasks = { ...activeBoard.tasks, [taskId]: { ...activeBoard.tasks[taskId], ...updates } };
+    updateActiveBoard({ tasks: updatedTasks });
   };
 
-  const toggleSubtask = (taskId: string, subtaskId: string) => {
-    const task = data.tasks[taskId];
-    const newSubtasks = task.subtasks.map(s => s.id === subtaskId ? { ...s, completed: !s.completed } : s);
-    updateTask(taskId, { subtasks: newSubtasks });
-    
-    // Confetti se todas forem concluídas
-    if (newSubtasks.every(s => s.completed) && typeof confetti !== 'undefined') {
-      confetti({ particleCount: 40, spread: 50, origin: { y: 0.8 }, colors: ['#f3b032', '#ffffff'] });
+  const updateUserNotificationSettings = (updates: Partial<NotificationSettings>) => {
+    if (!user) return;
+    const updatedUser = {
+      ...user,
+      notifications: { ...user.notifications, ...updates }
+    };
+    setUser(updatedUser);
+    showNotification("Notificações atualizadas");
+  };
+
+  const addNewTask = (columnId: string) => {
+    const taskId = `task-${Math.random().toString(36).substr(2, 9)}`;
+    const newTask: Task = { id: taskId, title: 'Nova Tarefa', description: '', priority: Priority.LOW, tags: [], createdAt: Date.now(), subtasks: [], comments: [], attachments: [], icon: 'fa-plus', assigneeId: user?.id };
+    const updatedTasks = { ...activeBoard.tasks, [taskId]: newTask };
+    const updatedCols = { ...activeBoard.columns, [columnId]: { ...activeBoard.columns[columnId], taskIds: [taskId, ...activeBoard.columns[columnId].taskIds] } };
+    updateActiveBoard({ tasks: updatedTasks, columns: updatedCols });
+    setSelectedTaskId(taskId);
+  };
+
+  const toggleTaskCompletion = (taskId: string) => {
+    const currentColId = Object.keys(activeBoard.columns).find(cid => activeBoard.columns[cid].taskIds.includes(taskId));
+    if (!currentColId) return;
+    const isDone = currentColId === 'col-3';
+    const targetColId = isDone ? 'col-1' : 'col-3';
+
+    const sourceIds = activeBoard.columns[currentColId].taskIds.filter(id => id !== taskId);
+    const targetIds = [taskId, ...activeBoard.columns[targetColId].taskIds];
+
+    updateActiveBoard({
+      columns: {
+        ...activeBoard.columns,
+        [currentColId]: { ...activeBoard.columns[currentColId], taskIds: sourceIds },
+        [targetColId]: { ...activeBoard.columns[targetColId], taskIds: targetIds }
+      }
+    });
+
+    if (!isDone && typeof confetti !== 'undefined') {
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 }, colors: ['#f3b032', '#ffffff'] });
     }
+    showNotification(isDone ? "Tarefa Reaberta" : "Tarefa Concluída!");
   };
 
   const handleSmartBreakdown = async () => {
     if (!selectedTaskId || !selectedTask) return;
     setIsBreakingDown(true);
-    showNotification("IA decompondo tarefa...");
+    showNotification("IA quebrando tarefa...");
     try {
-      const suggestions = await breakdownTaskIntoSubtasks(selectedTask.title, selectedTask.description, lang);
-      const newSubtasks: Subtask[] = suggestions.map(title => ({
-        id: Math.random().toString(36).substr(2, 9),
-        title,
-        completed: false
-      }));
-      updateTask(selectedTaskId, { subtasks: [...selectedTask.subtasks, ...newSubtasks] });
-      showNotification("Checklist gerado com sucesso!");
-    } catch (err) {
-      showNotification("Erro ao decompor tarefa.");
-    } finally {
-      setIsBreakingDown(false);
-    }
-  };
-
-  const toggleTaskCompletion = (taskId: string) => {
-    const currentColumnId = Object.keys(data.columns).find(cid => data.columns[cid].taskIds.includes(taskId));
-    if (!currentColumnId) return;
-
-    const isCurrentlyDone = currentColumnId === 'col-3';
-    const targetColumnId = isCurrentlyDone ? 'col-2' : 'col-3';
-
-    setData(prev => {
-      const sourceCol = prev.columns[currentColumnId];
-      const targetCol = prev.columns[targetColumnId];
-      const newSourceTaskIds = sourceCol.taskIds.filter(id => id !== taskId);
-      const newTargetTaskIds = [taskId, ...targetCol.taskIds];
-      return {
-        ...prev,
-        columns: {
-          ...prev.columns,
-          [currentColumnId]: { ...sourceCol, taskIds: newSourceTaskIds },
-          [targetColumnId]: { ...targetCol, taskIds: newTargetTaskIds }
-        }
-      };
-    });
-
-    if (!isCurrentlyDone && typeof confetti !== 'undefined') {
-      confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 }, colors: ['#10b981', '#ffffff'] });
-    }
-    showNotification(isCurrentlyDone ? "Tarefa reaberta" : "Tarefa concluída!");
+      const steps = await breakdownTaskIntoSubtasks(selectedTask.title, selectedTask.description, lang);
+      const subs: Subtask[] = steps.map(s => ({ id: Math.random().toString(36).substr(2, 5), title: s, completed: false }));
+      updateTask(selectedTaskId, { subtasks: [...selectedTask.subtasks, ...subs] });
+    } catch (e) { showNotification("Erro IA"); } finally { setIsBreakingDown(false); }
   };
 
   const handlePredictDeadline = async () => {
     if (!selectedTaskId || !selectedTask) return;
     setIsPredictingDeadline(true);
-    setPredictionResult(null);
     try {
-      const result = await predictTaskDeadline(selectedTask, data, lang);
-      setPredictionResult(result);
-      showNotification("Previsão gerada pela IA!");
-    } catch (err) {
-      showNotification("Falha na previsão.");
-    } finally {
-      setIsPredictingDeadline(false);
-    }
-  };
-
-  const applyPredictedDeadline = () => {
-    if (!selectedTaskId || !predictionResult) return;
-    const date = new Date(predictionResult.suggestedDate).getTime();
-    updateTask(selectedTaskId, { dueDate: date });
-    setPredictionResult(null);
-    showNotification("Novo prazo aplicado.");
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedTaskId || !e.target.files?.[0]) return;
-    const file = e.target.files[0];
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const url = event.target?.result as string;
-      const newAttachment: Attachment = {
-        id: Math.random().toString(36).substr(2, 9),
-        name: file.name,
-        type: file.type,
-        size: (file.size / 1024).toFixed(1) + ' KB',
-        url: url
-      };
-      const currentAttachments = data.tasks[selectedTaskId].attachments || [];
-      updateTask(selectedTaskId, { attachments: [...currentAttachments, newAttachment] });
-      showNotification(`Arquivo "${file.name}" anexado.`);
-    };
-    reader.readAsDataURL(file);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+      const res = await predictTaskDeadline(selectedTask, activeBoard, lang);
+      setPredictionResult(res);
+    } catch (e) { showNotification("Erro Previsão"); } finally { setIsPredictingDeadline(false); }
   };
 
   const handleSmartPrioritize = async () => {
     if (!prioritizeCriteria.trim()) return;
     setIsPrioritizing(true);
     setShowPrioritizeModal(false);
-    showNotification(t.insightsLoading);
     try {
-      const result: PrioritizationResult = await prioritizeBoardWithAI(data, prioritizeCriteria, lang);
-      const updatedTasks = { ...data.tasks };
-      Object.entries(result.priorityChanges).forEach(([tid, p]) => {
-        if (updatedTasks[tid]) updatedTasks[tid] = { ...updatedTasks[tid], priority: p as Priority };
+      const result: PrioritizationResult = await prioritizeBoardWithAI(activeBoard, prioritizeCriteria, lang);
+      const updatedTasks = { ...activeBoard.tasks };
+      Object.entries(result.priorityChanges).forEach(([tid, p]) => { if (updatedTasks[tid]) updatedTasks[tid].priority = p as Priority; });
+      updateActiveBoard({
+        tasks: updatedTasks,
+        columns: { ...activeBoard.columns, ...Object.fromEntries(Object.entries(result.columnOrders).map(([cid, ids]) => [cid, { ...activeBoard.columns[cid], taskIds: ids }])) }
       });
-      const updatedColumns = { ...data.columns };
-      Object.entries(result.columnOrders).forEach(([cid, taskIds]) => {
-        if (updatedColumns[cid]) updatedColumns[cid] = { ...updatedColumns[cid], taskIds };
-      });
-      setData(prev => ({ ...prev, tasks: updatedTasks, columns: updatedColumns }));
       setInsights(result.insight);
-      showNotification(t.updateSuccess);
-    } catch (err) {
-      showNotification("Erro ao priorizar com IA.");
-    } finally {
-      setIsPrioritizing(false);
-      setPrioritizeCriteria('');
-    }
+      showNotification("Quadro Otimizado!");
+    } catch (e) { showNotification("Erro IA"); } finally { setIsPrioritizing(false); }
   };
 
-  const addNewTask = (columnId: string) => {
-    const taskId = `task-${Math.random().toString(36).substr(2, 9)}`;
-    const newTask: Task = { id: taskId, title: 'Nova Tarefa', description: '', priority: Priority.LOW, tags: [], createdAt: Date.now(), subtasks: [], comments: [], attachments: [], icon: 'fa-tasks', assigneeId: user?.id };
-    setData(prev => ({
-      ...prev,
-      tasks: { ...prev.tasks, [taskId]: newTask },
-      columns: { ...prev.columns, [columnId]: { ...prev.columns[columnId], taskIds: [taskId, ...prev.columns[columnId].taskIds] } }
+  const exportExcel = () => {
+    const data = Object.values(activeBoard.tasks).map((t: Task) => ({
+      Título: t.title,
+      Prioridade: t.priority,
+      Status: activeBoard.columns['col-3'].taskIds.includes(t.id) ? 'Concluído' : 'Ativo'
     }));
-    setSelectedTaskId(taskId);
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Status");
+    XLSX.writeFile(wb, `${activeBoard.title}.xlsx`);
   };
 
-  const handleAddComment = () => {
-    if (!selectedTaskId || !newCommentText.trim() || !user) return;
-    const newComment: Comment = { id: Math.random().toString(36).substr(2, 9), text: newCommentText.trim(), author: user.name, timestamp: Date.now() };
-    const currentComments = data.tasks[selectedTaskId].comments || [];
-    updateTask(selectedTaskId, { comments: [...currentComments, newComment] });
-    setNewCommentText('');
-    showNotification("Comentário adicionado");
-  };
-
-  const handleAuth = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email || !password) return;
-    const newUser: User = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: email.split('@')[0].toUpperCase(),
-      email, role: 'admin', lang: 'pt', points: 100,
-      photoURL: `https://ui-avatars.com/api/?name=${email[0]}&background=f3b032&color=fff`,
-      notifications: DEFAULT_NOTIFICATIONS
-    };
-    setUser(newUser);
-    localStorage.setItem('vieira_session_user', JSON.stringify(newUser));
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('vieira_session_user');
-    setUser(null);
-  };
-
-  const updateUserSettings = (updates: Partial<User>) => {
-    if (!user) return;
-    const updatedUser = { ...user, ...updates };
-    setUser(updatedUser);
-    localStorage.setItem('vieira_session_user', JSON.stringify(updatedUser));
-  };
-
-  if (!user) {
-    return (
-      <main className="min-h-screen bg-[#050505] flex items-center justify-center p-6">
-        <div className="w-full max-w-sm bg-[#111] p-8 rounded-2xl border border-white/5 shadow-2xl">
-          <div className="flex flex-col items-center mb-8">
-            <BrandLogo size="lg" />
-            <p className="text-slate-200 text-[10px] font-bold tracking-[0.3em] uppercase mt-4">Login no Workspace</p>
-          </div>
-          <form onSubmit={handleAuth} className="space-y-4">
-            <div>
-              <label htmlFor="login-email" className="block text-[10px] font-black uppercase text-slate-400 mb-1 ml-1 tracking-widest">E-mail Corporativo</label>
-              <input id="login-email" type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-white/5 border border-white/20 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#f3b032]/50 transition-all text-white" />
-            </div>
-            <div>
-              <label htmlFor="login-pass" className="block text-[10px] font-black uppercase text-slate-400 mb-1 ml-1 tracking-widest">Senha de Acesso</label>
-              <input id="login-pass" type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-white/5 border border-white/20 rounded-xl px-4 py-3 text-sm outline-none focus:border-[#f3b032]/50 transition-all text-white" />
-            </div>
-            <button type="submit" className="w-full bg-[#f3b032] text-black font-black py-4 rounded-xl hover:bg-[#ffc24f] transition-all text-xs uppercase tracking-widest mt-4 shadow-lg shadow-[#f3b032]/10">Entrar no Sistema</button>
-          </form>
-        </div>
-      </main>
-    );
-  }
-
-  const selectedTask = selectedTaskId ? data.tasks[selectedTaskId] : null;
-  const isSelectedTaskFinished = selectedTaskId ? data.columns['col-3'].taskIds.includes(selectedTaskId) : false;
+  // --- UI Parts ---
+  if (!user) return (
+    <main className="h-screen bg-[#050505] flex items-center justify-center p-6 pb-safe pt-safe">
+      <div className="w-full max-w-sm bg-[#0e0e0e] p-8 rounded-[2.5rem] border border-white/5 text-center animate-modal shadow-2xl">
+        <BrandLogo size="lg" />
+        <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.3em] mt-8">Project Intelligence</p>
+        <form onSubmit={handleAuth} className="mt-10 space-y-4 text-left">
+          <input type="email" placeholder="E-mail corporativo" value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-sm text-white outline-none focus:border-[#f3b032] transition-all" />
+          <input type="password" placeholder="Senha mestre" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-sm text-white outline-none focus:border-[#f3b032] transition-all" />
+          <button className="w-full bg-gradient-to-r from-[#f3b032] to-[#d49924] text-black font-black py-5 rounded-2xl uppercase text-[11px] tracking-[0.2em] shadow-lg active:scale-95 transition-all mt-4">Entrar</button>
+        </form>
+      </div>
+    </main>
+  );
 
   return (
-    <div className="h-screen flex flex-col bg-[#050505] text-slate-100">
-      <header className="h-16 border-b border-white/10 bg-[#0a0a0a]/90 backdrop-blur-md flex items-center justify-between px-6 z-50 shrink-0 gap-4">
-        <div className="flex items-center gap-6">
-          <BrandLogo size="sm" />
-          <nav className="hidden xl:flex items-center gap-1 bg-white/5 p-1 rounded-lg">
-            <button onClick={() => setShowDashboard(false)} className={`px-4 py-1.5 rounded-md text-[10px] font-black uppercase tracking-widest transition-all ${!showDashboard ? 'bg-[#f3b032] text-black shadow-md' : 'text-slate-200 hover:text-white'}`}>Quadro</button>
-            <button onClick={() => setShowDashboard(true)} className={`px-4 py-1.5 rounded-md text-[10px] font-black uppercase tracking-widest transition-all ${showDashboard ? 'bg-[#f3b032] text-black shadow-md' : 'text-slate-200 hover:text-white'}`}>Insights</button>
-          </nav>
-        </div>
-
-        <div className="flex-1 max-w-2xl flex items-center gap-4">
-          <div className="relative group flex-1 hidden md:block">
-            <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
-            <input type="text" placeholder="Pesquisar tarefas..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-xs outline-none focus:border-[#f3b032]/80 transition-all" />
-          </div>
-          <button onClick={() => setShowPrioritizeModal(true)} className="w-8 h-8 rounded-lg flex items-center justify-center text-[#f3b032] hover:bg-[#f3b032]/10 transition-all border border-white/10">
-            <i className="fas fa-wand-magic-sparkles"></i>
-          </button>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <button onClick={() => setShowProfileModal(true)} className="hover:opacity-80 transition-all">
-            <img src={user.photoURL} className="w-9 h-9 rounded-xl border-2 border-[#f3b032]/30 shadow-lg" alt="Perfil" />
-          </button>
+    <div className="h-screen bg-[#050505] flex flex-col overflow-hidden pb-safe pt-safe">
+      {/* Header Compacto */}
+      <header className="shrink-0 h-16 glass border-b border-white/5 flex items-center justify-between px-6 z-40">
+        <BrandLogo size="sm" />
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowPrioritizeModal(true)} className="w-10 h-10 rounded-xl bg-[#f3b032]/10 border border-[#f3b032]/20 text-[#f3b032] flex items-center justify-center"><i className="fas fa-wand-magic-sparkles text-xs"></i></button>
+          <img src={user.photoURL} className="w-9 h-9 rounded-xl border border-white/20" alt="" />
         </div>
       </header>
 
-      <main id="main-content" className="flex-1 overflow-x-auto p-6 kanban-container relative bg-grid-white/[0.03]">
-        {showDashboard ? (
-          <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in zoom-in duration-500">
-            {/* Dashboard simplificado com Recharts */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-[#121212] p-6 rounded-2xl border border-white/10 shadow-xl">
-                <h3 className="text-[10px] font-black text-slate-200 uppercase tracking-widest mb-6">Distribuição</h3>
-                <div className="h-48">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={[{ name: 'To Do', value: data.columns['col-1'].taskIds.length, fill: '#f3b032' }, { name: 'Done', value: data.columns['col-3'].taskIds.length, fill: '#10b981' }]} innerRadius={40} outerRadius={60} dataKey="value" />
-                      <Tooltip contentStyle={{ background: '#111', border: 'none' }} />
-                    </PieChart>
-                  </ResponsiveContainer>
+      {/* Área de Conteúdo Principal */}
+      <main className="flex-1 overflow-hidden relative">
+        {viewMode === 'board' && (
+          <div className="h-full flex flex-col">
+            {/* Search Bar Mobile */}
+            <div className="px-6 py-4 bg-[#0a0a0a]/50">
+               <div className="relative">
+                 <i className="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+                 <input type="text" placeholder="Buscar tarefas..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-xs text-white outline-none focus:border-[#f3b032]/40 transition-all" />
+               </div>
+            </div>
+
+            {/* Kanban Horizontal Snap Scroll */}
+            <div className="flex-1 overflow-x-auto snap-x snap-mandatory flex gap-4 p-6 custom-scrollbar">
+              {activeBoard.columnOrder.map(colId => {
+                const column = activeBoard.columns[colId];
+                const taskIds = column.taskIds.filter(tid => activeBoard.tasks[tid].title.toLowerCase().includes(searchQuery.toLowerCase()));
+                return (
+                  <section key={colId} className="w-[85vw] md:w-[320px] shrink-0 snap-center flex flex-col bg-[#0a0a0a] border border-white/5 rounded-[2rem] overflow-hidden shadow-xl">
+                    <div className="p-5 flex items-center justify-between border-b border-white/5 bg-white/[0.02]">
+                       <div className="flex items-center gap-3">
+                         <span className={`w-2 h-2 rounded-full ${colId === 'col-3' ? 'bg-[#10b981]' : colId === 'col-2' ? 'bg-[#f3b032]' : 'bg-slate-500'}`}></span>
+                         <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-300">{column.title}</h2>
+                       </div>
+                       <button onClick={() => addNewTask(colId)} className="w-8 h-8 rounded-lg bg-white/5 text-slate-400 flex items-center justify-center"><i className="fas fa-plus text-xs"></i></button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                       {taskIds.map(tid => {
+                         const task = activeBoard.tasks[tid];
+                         return (
+                           <div key={tid} onClick={() => setSelectedTaskId(tid)} className="bg-[#111] p-5 rounded-2xl border border-white/5 active:scale-95 transition-all shadow-lg active:bg-[#161616]">
+                             <div className="flex justify-between items-start mb-3">
+                               <h3 className={`text-sm font-bold ${colId === 'col-3' ? 'text-slate-500 line-through' : 'text-white'}`}>{task.title}</h3>
+                               <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded border ${task.priority === Priority.HIGH ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-white/5 text-slate-500 border-white/10'}`}>{task.priority}</span>
+                             </div>
+                             {task.subtasks.length > 0 && (
+                               <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden mt-2">
+                                 <div className="h-full bg-[#f3b032]" style={{ width: `${(task.subtasks.filter(s => s.completed).length / task.subtasks.length) * 100}%` }}></div>
+                               </div>
+                             )}
+                           </div>
+                         );
+                       })}
+                    </div>
+                  </section>
+                );
+              })}
+              <div className="w-6 shrink-0 md:hidden"></div> {/* Padding final */}
+            </div>
+          </div>
+        )}
+
+        {viewMode === 'dashboard' && (
+          <div className="h-full overflow-y-auto p-8 space-y-8 animate-modal pb-24">
+             <h2 className="text-2xl font-black uppercase italic tracking-tighter">Performance</h2>
+             <div className="bg-[#0e0e0e] p-8 rounded-[2rem] border border-white/5">
+                <h3 className="text-[10px] font-black uppercase text-slate-500 mb-6 tracking-widest">Distribuição</h3>
+                <div className="h-64">
+                   <ResponsiveContainer width="100%" height="100%">
+                     <PieChart>
+                       <Pie data={[{n:'Done',v:activeBoard.columns['col-3'].taskIds.length,f:'#10b981'},{n:'Rest',v:activeBoard.columns['col-1'].taskIds.length+activeBoard.columns['col-2'].taskIds.length,f:'#333'}]} dataKey="v" innerRadius={60} outerRadius={80} stroke="none" fill="#f3b032" />
+                       <Tooltip contentStyle={{background:'#111', border:'none', borderRadius:'12px'}} />
+                     </PieChart>
+                   </ResponsiveContainer>
                 </div>
-              </div>
-              <div className="bg-[#121212] p-6 rounded-2xl border border-white/10 shadow-xl col-span-2">
-                <h3 className="text-[10px] font-black text-slate-200 uppercase tracking-widest mb-6">Velocidade</h3>
-                <div className="h-48">
+             </div>
+             <div className="bg-[#0e0e0e] p-8 rounded-[2rem] border border-white/5">
+                <h3 className="text-[10px] font-black uppercase text-slate-500 mb-6 tracking-widest">Atividade Semanal</h3>
+                <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={[{d:'S',v:4},{d:'T',v:7},{d:'Q',v:5},{d:'Q',v:10}]}>
-                      <Area type="monotone" dataKey="v" stroke="#f3b032" fill="#f3b032" fillOpacity={0.1} />
+                    <AreaChart data={[{n:'S',v:10},{n:'T',v:25},{n:'Q',v:18},{n:'Q',v:42},{n:'S',v:35}]}>
+                      <Area type="monotone" dataKey="v" stroke="#f3b032" strokeWidth={3} fill="#f3b03222" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
-              </div>
-            </div>
+             </div>
           </div>
-        ) : (
-          <div className="flex gap-6 items-start h-full">
-            {data.columnOrder.map(colId => {
-              const column = data.columns[colId];
-              const taskIds = column.taskIds.filter(tid => {
-                const t = data.tasks[tid];
-                if (filterAssigneeId && t.assigneeId !== filterAssigneeId) return false;
-                const q = searchQuery.toLowerCase();
-                return t.title.toLowerCase().includes(q) || t.tags.some(tg => tg.toLowerCase().includes(q));
-              });
+        )}
 
-              return (
-                <section key={colId} className="w-[310px] flex flex-col h-full bg-[#121212] border-x border-white/10 shrink-0 shadow-lg">
-                  <div className="p-4 flex items-center justify-between border-b border-white/20 bg-white/5">
-                    <div className="flex items-center gap-2">
-                      <h2 className="font-black text-[11px] uppercase tracking-[0.1em] text-white">{column.title}</h2>
-                      <span className="text-[10px] bg-white/10 px-2 rounded-full text-white font-black">{taskIds.length}</span>
-                    </div>
-                    <button onClick={() => addNewTask(colId)} className="w-7 h-7 rounded-lg hover:bg-[#f3b032] hover:text-black transition-all flex items-center justify-center text-slate-200 border border-white/10">
-                      <i className="fas fa-plus text-[12px]"></i>
-                    </button>
-                  </div>
+        {viewMode === 'profile' && (
+          <div className="h-full overflow-y-auto p-8 animate-modal pb-24">
+             <div className="flex flex-col items-center mb-10">
+               <img src={user.photoURL} className="w-24 h-24 rounded-[2rem] border-4 border-[#f3b032] shadow-2xl mb-6" alt="" />
+               <h2 className="text-2xl font-black italic mb-1">{user.name}</h2>
+               <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em]">{user.email}</p>
+             </div>
 
-                  <div className="flex-1 overflow-y-auto p-3 space-y-4 custom-scrollbar">
-                    {taskIds.map(tid => {
-                      const task = data.tasks[tid];
-                      const totalSub = task.subtasks.length;
-                      const doneSub = task.subtasks.filter(s => s.completed).length;
-                      const progress = totalSub > 0 ? (doneSub / totalSub) * 100 : 0;
-                      
-                      return (
-                        <div key={tid} onClick={() => setSelectedTaskId(tid)} className={`bg-[#1e1e1e] border-2 ${selectedTaskId === tid ? 'border-[#f3b032]' : 'border-white/10'} p-4 rounded-xl hover:border-[#f3b032]/60 cursor-pointer transition-all shadow-xl group`}>
-                          <div className="flex items-start justify-between gap-3 mb-2">
-                            <h3 className={`text-sm font-bold leading-tight ${colId === 'col-3' ? 'text-slate-400 line-through' : 'text-white'}`}>
-                              {task.title}
-                            </h3>
-                            <i className={`fas ${task.icon || 'fa-tasks'} text-[#f3b032] text-xs`}></i>
-                          </div>
-                          
-                          {/* Barra de Progresso no Card */}
-                          {totalSub > 0 && (
-                            <div className="mt-3 space-y-1.5">
-                              <div className="flex justify-between text-[9px] font-black uppercase text-slate-500 tracking-tighter">
-                                <span>Progresso</span>
-                                <span>{doneSub}/{totalSub}</span>
-                              </div>
-                              <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
-                                <div className={`h-full transition-all duration-500 ${progress === 100 ? 'bg-green-500' : 'bg-[#f3b032]'}`} style={{ width: `${progress}%` }} />
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="flex items-center justify-between mt-4 pt-3 border-t border-white/5">
-                            <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md border ${task.priority === Priority.HIGH ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-white/5 text-slate-400 border-white/10'}`}>
-                              {task.priority}
-                            </span>
-                            {task.assigneeId && (
-                              <img src={MOCK_TEAM.find(u => u.id === task.assigneeId)?.photoURL} className="w-5 h-5 rounded-full border border-white/20" alt="" />
-                            )}
-                          </div>
+             <div className="max-w-md mx-auto space-y-8">
+               {/* Notificações Section */}
+               <section className="bg-[#0e0e0e] p-6 rounded-[2rem] border border-white/5 space-y-6">
+                 <div className="flex items-center gap-3 mb-4">
+                   <i className="fas fa-bell text-[#f3b032]"></i>
+                   <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-400">Configurações de Notificação</h3>
+                 </div>
+                 
+                 <div className="space-y-4">
+                    <div className="p-4 bg-white/[0.02] rounded-2xl border border-white/5">
+                      <Toggle 
+                        active={user.notifications.slackEnabled} 
+                        onClick={() => updateUserNotificationSettings({ slackEnabled: !user.notifications.slackEnabled })} 
+                        label="Slack Integration" 
+                      />
+                      {user.notifications.slackEnabled && (
+                        <div className="mt-3 animate-modal">
+                          <label className="text-[9px] font-black uppercase text-slate-500 mb-2 block">Webhook URL</label>
+                          <input 
+                            type="text" 
+                            placeholder="https://hooks.slack.com/services/..."
+                            value={user.notifications.slackWebhookUrl || ''} 
+                            onChange={e => updateUserNotificationSettings({ slackWebhookUrl: e.target.value })}
+                            className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-[11px] text-white outline-none focus:border-[#f3b032]/40 transition-all"
+                          />
                         </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              );
-            })}
+                      )}
+                    </div>
+
+                    <div className="p-4 bg-white/[0.02] rounded-2xl border border-white/5">
+                      <Toggle 
+                        active={user.notifications.whatsappEnabled} 
+                        onClick={() => updateUserNotificationSettings({ whatsappEnabled: !user.notifications.whatsappEnabled })} 
+                        label="WhatsApp Alertas" 
+                      />
+                      {user.notifications.whatsappEnabled && (
+                        <div className="mt-3 animate-modal">
+                          <label className="text-[9px] font-black uppercase text-slate-500 mb-2 block">Número (Internacional)</label>
+                          <input 
+                            type="text" 
+                            placeholder="+55 11 99999-9999"
+                            value={user.notifications.whatsappNumber || ''} 
+                            onChange={e => updateUserNotificationSettings({ whatsappNumber: e.target.value })}
+                            className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-[11px] text-white outline-none focus:border-[#f3b032]/40 transition-all"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2 px-1 space-y-2">
+                       <Toggle 
+                        active={user.notifications.notifyOnHighPriority} 
+                        onClick={() => updateUserNotificationSettings({ notifyOnHighPriority: !user.notifications.notifyOnHighPriority })} 
+                        label="Prioridade Crítica" 
+                      />
+                       <Toggle 
+                        active={user.notifications.notifyOnMentions} 
+                        onClick={() => updateUserNotificationSettings({ notifyOnMentions: !user.notifications.notifyOnMentions })} 
+                        label="Menções e Comentários" 
+                      />
+                    </div>
+                 </div>
+               </section>
+
+               {/* Ações Gerais */}
+               <div className="space-y-4">
+                 <button onClick={exportExcel} className="w-full py-4 bg-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-white/10 flex items-center justify-center gap-3"><i className="fas fa-file-excel"></i> Exportar Dados</button>
+                 <button onClick={() => setLang(lang === 'pt' ? 'en' : 'pt')} className="w-full py-4 bg-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-white/10 flex items-center justify-center gap-3"><i className="fas fa-globe"></i> {lang === 'pt' ? 'Português' : 'English'}</button>
+                 <button onClick={() => setUser(null)} className="w-full py-4 bg-red-500/10 text-red-500 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-red-500/20">Sair da Conta</button>
+               </div>
+             </div>
           </div>
         )}
       </main>
 
-      {/* Detail Sidebar */}
+      {/* Bottom Navigation Ergonômica */}
+      <nav className="shrink-0 h-20 glass border-t border-white/5 flex items-center justify-around px-4 pb-safe">
+        <button onClick={() => setViewMode('board')} className={`flex flex-col items-center gap-1 transition-all ${viewMode === 'board' ? 'text-[#f3b032]' : 'text-slate-500'}`}>
+          <i className="fas fa-th-large text-lg"></i>
+          <span className="text-[9px] font-black uppercase">Quadro</span>
+        </button>
+        <button onClick={() => setViewMode('dashboard')} className={`flex flex-col items-center gap-1 transition-all ${viewMode === 'dashboard' ? 'text-[#f3b032]' : 'text-slate-500'}`}>
+          <i className="fas fa-chart-line text-lg"></i>
+          <span className="text-[9px] font-black uppercase">Painel</span>
+        </button>
+        <button onClick={() => addNewTask('col-1')} className="w-14 h-14 bg-gradient-to-br from-[#f3b032] to-[#d49924] rounded-2xl flex items-center justify-center text-black shadow-lg shadow-[#f3b032]/20 -mt-8 border-4 border-[#050505]">
+          <i className="fas fa-plus text-xl"></i>
+        </button>
+        <button onClick={() => setViewMode('projects')} className={`flex flex-col items-center gap-1 transition-all ${viewMode === 'projects' ? 'text-[#f3b032]' : 'text-slate-500'}`}>
+          <i className="fas fa-folder text-lg"></i>
+          <span className="text-[9px] font-black uppercase">Projetos</span>
+        </button>
+        <button onClick={() => setViewMode('profile')} className={`flex flex-col items-center gap-1 transition-all ${viewMode === 'profile' ? 'text-[#f3b032]' : 'text-slate-500'}`}>
+          <i className="fas fa-user text-lg"></i>
+          <span className="text-[9px] font-black uppercase">Perfil</span>
+        </button>
+      </nav>
+
+      {/* Detalhes da Tarefa (Mobile Bottom Sheet / Desktop Sidebar) */}
       {selectedTaskId && selectedTask && (
-        <aside className="fixed inset-0 z-[100] flex justify-end">
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSelectedTaskId(null)} />
-          <div className="relative w-full max-w-md h-full bg-[#0a0a0a] border-l-4 border-[#f3b032]/40 p-8 flex flex-col shadow-2xl animate-in slide-in-from-right duration-300">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-3">
-                <i className={`fas ${selectedTask.icon || 'fa-tasks'} text-xl text-[#f3b032]`}></i>
-                <h2 className="text-xl font-black text-white uppercase tracking-tight">Tarefa Detalhada</h2>
+        <div className="fixed inset-0 z-[100] flex items-end md:items-center md:justify-center p-0 md:p-10">
+           <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSelectedTaskId(null)} />
+           <div className="relative w-full max-h-[90vh] md:max-w-xl md:max-h-[80vh] bg-[#0d0d0d] rounded-t-[2.5rem] md:rounded-[2.5rem] border-t md:border border-white/10 flex flex-col shadow-2xl animate-modal overflow-hidden">
+              <div className="w-12 h-1.5 bg-white/10 rounded-full mx-auto mt-4 md:hidden" />
+              <div className="p-8 flex items-center justify-between border-b border-white/5">
+                <h2 className="text-xl font-black uppercase italic tracking-tighter">Tarefa</h2>
+                <button onClick={() => setSelectedTaskId(null)} className="w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center"><i className="fas fa-times text-xs"></i></button>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => toggleTaskCompletion(selectedTaskId)} className={`px-4 py-2 rounded-xl border-2 text-[10px] font-black uppercase tracking-widest transition-all ${isSelectedTaskFinished ? 'bg-green-600/20 text-green-400 border-green-500/30' : 'bg-white/5 text-slate-300 border-white/10 hover:text-green-400 hover:border-green-400'}`}>
-                  {isSelectedTaskFinished ? 'Reabrir' : 'Concluir'}
-                </button>
-                <button onClick={() => setSelectedTaskId(null)} className="w-10 h-10 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-200 border border-white/10"><i className="fas fa-times text-lg"></i></button>
-              </div>
-            </div>
+              <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
+                 <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Título</label>
+                    <input type="text" value={selectedTask.title} onChange={e => updateTask(selectedTaskId, { title: e.target.value })} className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-white font-bold outline-none focus:border-[#f3b032]/50" />
+                 </div>
+                 
+                 <div className="flex gap-4">
+                   <div className="flex-1 space-y-2">
+                      <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Nível</label>
+                      <select value={selectedTask.priority} onChange={e => updateTask(selectedTaskId, { priority: e.target.value as Priority })} className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-xs font-black text-white outline-none appearance-none">
+                        <option value={Priority.LOW}>BAIXA</option>
+                        <option value={Priority.MEDIUM}>MÉDIA</option>
+                        <option value={Priority.HIGH}>ALTA</option>
+                      </select>
+                   </div>
+                   <div className="flex-1 space-y-2">
+                      <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Prazo</label>
+                      <button onClick={handlePredictDeadline} className="text-[9px] font-black text-[#f3b032] uppercase ml-2">Prever com IA</button>
+                      <input type="date" value={selectedTask.dueDate ? new Date(selectedTask.dueDate).toISOString().split('T')[0] : ''} onChange={e => updateTask(selectedTaskId, { dueDate: e.target.value ? new Date(e.target.value).getTime() : undefined })} className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-xs text-white outline-none" />
+                   </div>
+                 </div>
 
-            <div className="flex-1 overflow-y-auto space-y-8 pr-3 custom-scrollbar">
-              {/* Presença Simulada */}
-              <div className="flex items-center gap-2 p-3 bg-[#f3b032]/5 rounded-xl border border-[#f3b032]/10 animate-pulse">
-                <div className="flex -space-x-2">
-                  <img src={MOCK_TEAM[1].photoURL} className="w-5 h-5 rounded-full border border-[#0a0a0a]" alt="" />
-                  <img src={MOCK_TEAM[2].photoURL} className="w-5 h-5 rounded-full border border-[#0a0a0a]" alt="" />
-                </div>
-                <span className="text-[10px] font-bold text-[#f3b032] uppercase tracking-widest">Bruno e Carla estão visualizando</span>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em] ml-1">Título</label>
-                <input type="text" value={selectedTask.title} onChange={e => updateTask(selectedTaskId, { title: e.target.value })} className="w-full bg-white/5 border-2 border-white/10 rounded-xl px-5 py-4 text-base font-bold text-white focus:border-[#f3b032] outline-none" />
-              </div>
-
-              {/* Seção de Checklist de Subtarefas */}
-              <section className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em] ml-1 flex items-center gap-2">
-                    <i className="fas fa-list-check"></i> Subentregas
-                  </h3>
-                  <button onClick={handleSmartBreakdown} disabled={isBreakingDown} className="text-[9px] font-black uppercase text-[#f3b032] hover:text-white transition-all bg-[#f3b032]/10 px-2 py-1 rounded-lg border border-[#f3b032]/20 flex items-center gap-2">
-                    <i className={`fas ${isBreakingDown ? 'fa-spinner fa-spin' : 'fa-wand-magic-sparkles'}`}></i>
-                    Magia IA
-                  </button>
-                </div>
-                <div className="space-y-2">
-                  {selectedTask.subtasks.map(sub => (
-                    <div key={sub.id} onClick={() => toggleSubtask(selectedTaskId, sub.id)} className={`flex items-center gap-3 p-3 rounded-xl border-2 transition-all cursor-pointer ${sub.completed ? 'bg-white/5 border-white/5' : 'bg-white/[0.02] border-white/10 hover:border-white/20'}`}>
-                      <div className={`w-5 h-5 rounded-md flex items-center justify-center border-2 transition-all ${sub.completed ? 'bg-green-500 border-green-500' : 'border-white/20'}`}>
-                        {sub.completed && <i className="fas fa-check text-[10px] text-black"></i>}
-                      </div>
-                      <span className={`text-xs font-medium ${sub.completed ? 'text-slate-500 line-through' : 'text-slate-200'}`}>{sub.title}</span>
+                 <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                       <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Subtarefas</label>
+                       <button onClick={handleSmartBreakdown} disabled={isBreakingDown} className="text-[9px] font-black text-[#f3b032] uppercase bg-[#f3b032]/10 px-3 py-1.5 rounded-lg border border-[#f3b032]/20">
+                         {isBreakingDown ? <i className="fas fa-circle-notch fa-spin mr-1"></i> : <i className="fas fa-sparkles mr-1"></i>} IA Breakdown
+                       </button>
                     </div>
-                  ))}
-                  <button onClick={() => updateTask(selectedTaskId, { subtasks: [...selectedTask.subtasks, { id: Math.random().toString(36).substr(2, 9), title: 'Nova Subtarefa', completed: false }] })} className="w-full p-3 rounded-xl border-2 border-dashed border-white/10 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:border-white/20 hover:text-slate-400 transition-all">
-                    + Adicionar Item
-                  </button>
-                </div>
-              </section>
-
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em] ml-1">Prazo Inteligente</label>
-                  <button onClick={handlePredictDeadline} disabled={isPredictingDeadline} className="text-[9px] font-black uppercase text-[#f3b032] bg-[#f3b032]/10 px-2 py-1 rounded-lg border border-[#f3b032]/20">IA Prever</button>
-                </div>
-                <input type="date" value={selectedTask.dueDate ? new Date(selectedTask.dueDate).toISOString().split('T')[0] : ''} onChange={e => updateTask(selectedTaskId, { dueDate: e.target.value ? new Date(e.target.value).getTime() : undefined })} className="w-full bg-white/5 border-2 border-white/10 rounded-xl px-5 py-4 text-sm font-bold text-white focus:border-[#f3b032] outline-none" />
-                {predictionResult && (
-                  <div className="p-4 bg-[#f3b032]/10 border-2 border-[#f3b032]/30 rounded-xl">
-                    <p className="text-xs text-white font-bold mb-3">{predictionResult.reasoning}</p>
-                    <button onClick={applyPredictedDeadline} className="w-full py-2 bg-[#f3b032] text-black text-[10px] font-black uppercase rounded-lg">Aplicar {new Date(predictionResult.suggestedDate).toLocaleDateString()}</button>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-6 pt-6">
-                <h3 className="text-[10px] font-black uppercase text-[#f3b032] tracking-[0.3em] flex items-center gap-2"><i className="fas fa-comments"></i> Diálogo</h3>
-                <div className="flex gap-3">
-                  <input type="text" value={newCommentText} onChange={e => setNewCommentText(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAddComment()} placeholder="Nota rápida..." className="flex-1 bg-white/10 border-2 border-white/10 rounded-xl px-5 py-3 text-sm text-white focus:border-[#f3b032] outline-none" />
-                  <button onClick={handleAddComment} className="w-12 h-12 bg-[#f3b032] text-black rounded-xl flex items-center justify-center hover:bg-[#ffc24f] transition-all"><i className="fas fa-paper-plane"></i></button>
-                </div>
-                <div className="space-y-4">
-                  {(selectedTask.comments || []).map(comment => (
-                    <div key={comment.id} className="bg-white/5 p-4 rounded-xl border-l-4 border-white/20">
-                      <div className="flex justify-between mb-2">
-                        <span className="text-[10px] font-black text-[#f3b032] uppercase">{comment.author}</span>
-                        <span className="text-[10px] text-slate-500">{new Date(comment.timestamp).toLocaleDateString()}</span>
-                      </div>
-                      <p className="text-sm text-slate-200">{comment.text}</p>
+                    <div className="space-y-2">
+                       {selectedTask.subtasks.map(s => (
+                         <div key={s.id} onClick={() => {
+                           const next = selectedTask.subtasks.map(item => item.id === s.id ? { ...item, completed: !item.completed } : item);
+                           updateTask(selectedTaskId, { subtasks: next });
+                         }} className="flex items-center gap-3 p-4 bg-white/[0.03] border border-white/5 rounded-xl active:bg-white/[0.08]">
+                            <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${s.completed ? 'bg-[#10b981] border-[#10b981]' : 'border-white/20'}`}>
+                               {s.completed && <i className="fas fa-check text-[10px] text-black"></i>}
+                            </div>
+                            <span className={`text-sm ${s.completed ? 'text-slate-500 line-through' : 'text-slate-300'}`}>{s.title}</span>
+                         </div>
+                       ))}
+                       <button onClick={() => updateTask(selectedTaskId, { subtasks: [...selectedTask.subtasks, { id: Math.random().toString(36).substr(2, 5), title: 'Novo item', completed: false }] })} className="w-full py-4 border-2 border-dashed border-white/5 rounded-xl text-[10px] font-black text-slate-500 uppercase">+ Adicionar Passo</button>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </aside>
-      )}
+                 </div>
 
-      {/* Prioritize Criteria Modal */}
-      {showPrioritizeModal && (
-        <aside className="fixed inset-0 z-[300] flex items-center justify-center p-6">
-          <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={() => setShowPrioritizeModal(false)} />
-          <div className="relative w-full max-w-lg bg-[#0f0f0f] border-2 border-white/20 rounded-[2rem] p-8 shadow-2xl">
-            <h2 className="text-xl font-black uppercase tracking-widest text-white mb-6">IA Ordenação</h2>
-            <textarea value={prioritizeCriteria} onChange={e => setPrioritizeCriteria(e.target.value)} placeholder="Ex: 'Priorize por prazos críticos'..." className="w-full h-32 bg-white/5 border-2 border-white/10 rounded-2xl px-5 py-4 text-sm text-white focus:border-[#f3b032] outline-none resize-none mb-6" />
-            <div className="flex gap-4">
-              <button onClick={() => setShowPrioritizeModal(false)} className="flex-1 py-4 bg-white/5 border-2 border-white/10 rounded-2xl text-xs font-black uppercase text-slate-300">Cancelar</button>
-              <button onClick={handleSmartPrioritize} className="flex-1 py-4 bg-[#f3b032] text-black rounded-2xl text-xs font-black uppercase shadow-lg">Otimizar Quadro</button>
-            </div>
-          </div>
-        </aside>
-      )}
-
-      {/* Profile/Settings Modal */}
-      {showProfileModal && (
-        <aside className="fixed inset-0 z-[200] flex items-center justify-center p-6">
-          <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={() => setShowProfileModal(false)} />
-          <div className="relative w-full max-w-2xl bg-[#0f0f0f] border-2 border-white/20 rounded-[2.5rem] p-10 shadow-2xl">
-            <h2 className="text-3xl font-black uppercase text-white mb-10">Sistema</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-              <div className="space-y-6">
-                <h3 className="text-[11px] font-black text-[#f3b032] uppercase tracking-[0.4em]">Identidade</h3>
-                <input type="text" value={user.name} onChange={e => updateUserSettings({ name: e.target.value })} className="w-full bg-white/5 border-2 border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white font-bold outline-none" />
-                <select value={lang} onChange={e => {setLang(e.target.value as Language); updateUserSettings({ lang: e.target.value as any })}} className="w-full bg-white/5 border-2 border-white/10 rounded-2xl px-5 py-3.5 text-sm text-white font-bold outline-none">
-                  <option value="pt">PORTUGUÊS</option>
-                  <option value="en">ENGLISH</option>
-                </select>
+                 <button onClick={() => toggleTaskCompletion(selectedTaskId)} className="w-full py-5 bg-[#10b981] text-black rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-lg shadow-[#10b981]/20">Concluir Iniciativa</button>
+                 <button onClick={() => { if(confirm("Remover?")) { 
+                   const colId = Object.keys(activeBoard.columns).find(cid => activeBoard.columns[cid].taskIds.includes(selectedTaskId));
+                   if(colId) {
+                     const nextIds = activeBoard.columns[colId].taskIds.filter(id => id !== selectedTaskId);
+                     updateActiveBoard({ columns: { ...activeBoard.columns, [colId]: { ...activeBoard.columns[colId], taskIds: nextIds } } });
+                     setSelectedTaskId(null);
+                   }
+                 }}} className="w-full text-red-500/50 text-[10px] font-black uppercase py-4">Excluir Permanente</button>
               </div>
-              <div className="space-y-6">
-                <h3 className="text-[11px] font-black text-[#f3b032] uppercase tracking-[0.4em]">Notificações</h3>
-                <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border-2 border-white/10">
-                  <span className="text-xs font-bold text-white">SLACK SYNC</span>
-                  <button onClick={() => updateUserSettings({ notifications: { ...user.notifications, slackEnabled: !user.notifications.slackEnabled }})} className={`w-10 h-5 rounded-full relative transition-all ${user.notifications.slackEnabled ? 'bg-[#f3b032]' : 'bg-white/10'}`}>
-                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${user.notifications.slackEnabled ? 'right-0.5' : 'left-0.5'}`} />
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div className="mt-12 flex justify-center">
-              <button onClick={handleLogout} className="px-10 py-4 bg-red-600/10 text-red-500 border-2 border-red-500/30 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all">Encerrar Sessão</button>
-            </div>
-          </div>
-        </aside>
-      )}
-
-      {/* Global Notifications */}
-      {notification && (
-        <div className="fixed bottom-24 right-8 z-[300] animate-in fade-in slide-in-from-bottom-5">
-          <div className="bg-[#f3b032] text-black px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-2xl">
-            {notification}
-          </div>
+           </div>
         </div>
       )}
 
-      {/* IA Insights Bar */}
-      <div className="fixed bottom-6 right-6 left-6 h-12 glass border-2 border-white/10 rounded-2xl px-5 flex items-center gap-4 shadow-2xl z-40">
-        <i className="fas fa-wand-magic-sparkles text-[#f3b032] text-lg"></i>
-        <p className="text-[11px] font-black text-white italic truncate">{insights}</p>
+      {/* Modal IA Prioritize */}
+      {showPrioritizeModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
+           <div className="absolute inset-0 bg-black/95 backdrop-blur-xl" onClick={() => setShowPrioritizeModal(false)} />
+           <div className="relative w-full max-w-sm bg-[#0f0f0f] border border-white/10 rounded-[2.5rem] p-10 shadow-2xl animate-modal text-center">
+              <i className="fas fa-wand-magic-sparkles text-3xl text-[#f3b032] mb-6"></i>
+              <h2 className="text-xl font-black italic mb-2">IA Vieira Strat</h2>
+              <p className="text-slate-500 text-xs mb-8">Defina o critério para reorganizar este quadro.</p>
+              <textarea value={prioritizeCriteria} onChange={e => setPrioritizeCriteria(e.target.value)} placeholder="Ex: Focar em prazos curtos..." className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-4 text-xs text-white outline-none mb-6 resize-none" />
+              <button onClick={handleSmartPrioritize} disabled={isPrioritizing} className="w-full bg-[#f3b032] text-black font-black py-4 rounded-2xl uppercase text-[10px] tracking-widest active:scale-95 transition-all">
+                {isPrioritizing ? 'IA Trabalhando...' : 'Otimizar Agora'}
+              </button>
+           </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {notification && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-[#f3b032] text-black px-6 py-3 rounded-full font-black text-[10px] uppercase tracking-widest shadow-2xl z-[500] animate-modal border-2 border-black/10">
+          <i className="fas fa-bell mr-2"></i> {notification}
+        </div>
+      )}
+
+      {/* IA Insight Floating Badge */}
+      <div className="fixed bottom-24 left-6 right-6 h-10 glass rounded-full border border-white/10 px-4 flex items-center justify-center gap-3 z-30 pointer-events-none shadow-xl">
+         <div className="w-2 h-2 rounded-full bg-[#f3b032] animate-pulse"></div>
+         <span className="text-[10px] font-black italic text-slate-300 truncate">{insights}</span>
       </div>
     </div>
   );

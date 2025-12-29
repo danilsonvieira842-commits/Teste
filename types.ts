@@ -73,6 +73,8 @@ export interface Column {
 }
 
 export interface BoardData {
+  id: string;
+  title: string;
   tasks: Record<string, Task>;
   columns: Record<string, Column>;
   columnOrder: string[];
